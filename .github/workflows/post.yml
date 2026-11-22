@@ -1,0 +1,70 @@
+name: Daily post
+
+# Runs on GitHub's servers, so the owner's PC can be off.
+# 13:00 and 14:00 UTC = 16:00 and 17:00 in Riyadh, before the 18:00 post time
+# in config.json. The second run only retries what the first one missed.
+on:
+  schedule:
+    - cron: "0 13 * * *"
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (send nothing to Buffer)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: daily-post
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Put this week's videos on the Pages site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python post.py stage --out site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Queue today's posts in Buffer
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          PAGES_URL: ${{ steps.deploy.outputs.page_url }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: python post.py queue
+
+      - name: Save the posting log
+        if: always()
+        run: |
+          python post.py status
+          if [ -n "$(git status --porcelain posted.json)" ]; then
+            git config user.name "quran-shorts poster"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add posted.json
+            git commit -m "Posting log $(date -u +%F)"
+            git push
+          fi

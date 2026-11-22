@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""Daily poster for the quran-shorts videos. Runs on GitHub Actions.
+
+Each day it hands that day's video to Buffer, and Buffer publishes it to
+the connected Instagram and TikTok channels at the configured time. Nothing
+here needs the owner's PC.
+
+Commands:
+  python post.py stage --out site      put the videos for yesterday, today and
+                                       tomorrow into site/v/ (the Pages site)
+  python post.py queue                 create today's Buffer posts
+  python post.py status                print what is scheduled and what is left
+
+Environment:
+  BUFFER_API_KEY   Buffer personal API key (GitHub secret)
+  PAGES_URL        base URL of the deployed Pages site, e.g. https://me.github.io/repo/
+  DRY_RUN=1        print what would be sent, change nothing
+  BUFFER_API_URL   override the API endpoint (tests only)
+  TODAY            override today's date, YYYY-MM-DD (tests only)
+
+Only the Python standard library is used.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+ROOT = Path(__file__).resolve().parent
+CONFIG = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+SCHEDULE = json.loads((ROOT / "schedule.json").read_text(encoding="utf-8"))
+POSTED_PATH = ROOT / "posted.json"
+API_URL = os.environ.get("BUFFER_API_URL", "https://api.buffer.com")
+DRY_RUN = os.environ.get("DRY_RUN", "") not in ("", "0", "false")
+TZ = ZoneInfo(CONFIG["timezone"])
+SERVICES = {"instagram", "tiktok"}
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # captions are Arabic
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def gh_warning(msg: str) -> None:
+    # Shows as a yellow annotation on the GitHub Actions run page.
+    print(f"::warning::{msg}", flush=True)
+
+
+def today() -> date:
+    if os.environ.get("TODAY"):
+        return date.fromisoformat(os.environ["TODAY"])
+    return datetime.now(TZ).date()
+
+
+def load_posted() -> dict:
+    if POSTED_PATH.exists():
+        return json.loads(POSTED_PATH.read_text(encoding="utf-8"))
+    return {}
+
+
+def save_posted(posted: dict) -> None:
+    POSTED_PATH.write_text(json.dumps(posted, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def entries_on(day: date) -> list[dict]:
+    return [e for e in SCHEDULE["videos"] if e["date"] == day.isoformat()]
+
+
+# ---------------------------------------------------------------- stage
+
+def cmd_stage(args: argparse.Namespace) -> int:
+    """Download the release assets for yesterday..tomorrow into <out>/v/."""
+    out = Path(args.out) / "v"
+    out.mkdir(parents=True, exist_ok=True)
+    t = today()
+    wanted = [e for d in (-1, 0, 1) for e in entries_on(t + timedelta(days=d))]
+    (Path(args.out) / "index.html").write_text("<!doctype html><title>quran-shorts</title><p>Video files for the daily poster.</p>\n", encoding="utf-8")
+    (Path(args.out) / ".nojekyll").write_text("", encoding="utf-8")
+    if not wanted:
+        gh_warning(f"No videos scheduled around {t}. Add more with poster_sync.py on the PC.")
+        return 0
+    for e in wanted:
+        dest = out / e["file"]
+        if dest.exists():
+            continue
+        if args.local_dir:
+            shutil.copy(Path(args.local_dir) / e["file"], dest)
+        else:
+            cmd = ["gh", "release", "download", SCHEDULE["release_tag"], "--pattern", e["file"], "--dir", str(out)]
+            log("$ " + " ".join(cmd))
+            subprocess.run(cmd, check=True)
+        log(f"staged {e['file']} ({dest.stat().st_size} bytes)")
+    return 0
+
+
+# ---------------------------------------------------------------- Buffer API
+
+def gql(query: str, variables: dict | None = None) -> dict:
+    key = os.environ.get("BUFFER_API_KEY", "")
+    if not key:
+        raise SystemExit("BUFFER_API_KEY is not set. Add it under Settings > Secrets and variables > Actions.")
+    body = json.dumps({"query": query, "variables": variables or {}}).encode()
+    for attempt in range(4):
+        req = urllib.request.Request(API_URL, data=body, method="POST", headers={
+            "Authorization": f"Bearer {key}", "Content-Type": "application/json", "User-Agent": "quran-shorts-poster"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                data = json.loads(r.read())
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < 3:
+                wait = int(exc.headers.get("Retry-After") or 60)
+                log(f"Buffer rate limit, waiting {wait}s")
+                time.sleep(min(wait, 300))
+                continue
+            if exc.code >= 500 and attempt < 3:
+                time.sleep(20)
+                continue
+            raise SystemExit(f"Buffer API HTTP {exc.code}: {exc.read()[:500]!r}")
+        if data.get("errors"):
+            raise SystemExit(f"Buffer API error: {json.dumps(data['errors'])[:800]}")
+        return data["data"]
+    raise SystemExit("Buffer API kept failing")
+
+
+def find_channels() -> dict[str, dict]:
+    """Return {"instagram": channel, "tiktok": channel} from the Buffer account."""
+    orgs = gql("query { account { organizations { id name } } }")["account"]["organizations"]
+    found: dict[str, dict] = {}
+    for org in orgs:
+        chans = gql("query($org: OrganizationId!) { channels(input: {organizationId: $org}) "
+                    "{ id name service isDisconnected isLocked isQueuePaused } }", {"org": org["id"]})["channels"]
+        for c in chans:
+            svc = str(c.get("service", "")).lower()
+            if svc in SERVICES and svc in CONFIG["platforms"] and svc not in found:
+                found[svc] = c
+    return found
+
+
+CREATE_POST = """
+mutation($input: CreatePostInput!) {
+  createPost(input: $input) {
+    __typename
+    ... on PostActionSuccess { post { id dueAt } }
+    ... on MutationError { message }
+  }
+}"""
+
+
+def create_post(channel: dict, entry: dict, video_url: str, due: datetime) -> str:
+    svc = channel["service"].lower()
+    metadata = {"instagram": {"type": "reel", "shouldShareToFeed": True}} if svc == "instagram" else {"tiktok": {}}
+    if svc == "tiktok" and CONFIG.get("tiktok_label_ai") is not None:
+        metadata["tiktok"]["isAiGenerated"] = bool(CONFIG["tiktok_label_ai"])
+    video: dict = {"url": video_url}
+    if CONFIG.get("thumbnail_offset_ms"):
+        video["metadata"] = {"thumbnailOffset": int(CONFIG["thumbnail_offset_ms"])}
+    payload = {
+        "channelId": channel["id"],
+        "text": entry["caption"],
+        "schedulingType": "automatic",
+        "mode": "customScheduled",
+        "dueAt": due.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "needsApproval": False,
+        "assets": [{"video": video}],
+        "metadata": metadata,
+    }
+    if DRY_RUN:
+        log(f"DRY RUN createPost {svc}: {json.dumps(payload, ensure_ascii=False)[:400]}")
+        return "dry-run"
+    res = gql(CREATE_POST, {"input": payload})["createPost"]
+    if res.get("__typename") != "PostActionSuccess":
+        raise RuntimeError(f"{svc}: {res.get('message') or res}")
+    return res["post"]["id"]
+
+
+# ---------------------------------------------------------------- queue
+
+def url_ready(url: str, size: int) -> bool:
+    """True when the video is served directly (no redirect) at the full size."""
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+    opener = urllib.request.build_opener(NoRedirect)
+    try:
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "quran-shorts-poster"})
+        with opener.open(req, timeout=30) as r:
+            length = int(r.headers.get("Content-Length") or -1)
+            return r.status == 200 and (length == size or length == -1)
+    except Exception as exc:  # noqa: BLE001 - any failure means "not yet"
+        log(f"  not ready yet: {exc}")
+        return False
+
+
+def due_time(day: date) -> datetime:
+    hh, mm = (int(x) for x in CONFIG["post_time"].split(":"))
+    due = datetime(day.year, day.month, day.day, hh, mm, tzinfo=TZ)
+    soonest = datetime.now(timezone.utc) + timedelta(minutes=10)
+    return max(due, soonest)
+
+
+def cmd_queue(args: argparse.Namespace) -> int:
+    t = today()
+    todays = entries_on(t)
+    posted = load_posted()
+    left = [e for e in SCHEDULE["videos"] if e["date"] >= t.isoformat()]
+    if len(left) <= CONFIG.get("warn_when_days_left", 7):
+        gh_warning(f"Only {len(left)} videos left in the schedule (last: {left[-1]['date'] if left else 'none'}). "
+                   "Render more on the PC and run poster_sync.py.")
+    if not todays:
+        gh_warning(f"Nothing scheduled for {t}.")
+        return 0
+
+    pages = os.environ.get("PAGES_URL", "").rstrip("/")
+    if not pages and not DRY_RUN:
+        raise SystemExit("PAGES_URL is not set")
+
+    channels = {} if DRY_RUN and not os.environ.get("BUFFER_API_KEY") else find_channels()
+    if DRY_RUN and not channels:
+        channels = {s: {"id": f"dry-{s}", "service": s, "name": s} for s in CONFIG["platforms"]}
+    missing = [s for s in CONFIG["platforms"] if s not in channels]
+    for s in missing:
+        gh_warning(f"No {s} channel is connected in Buffer.")
+
+    failures = []
+    for entry in todays:
+        url = f"{pages}/v/{entry['file']}"
+        record = posted.setdefault(entry["date"], {"file": entry["file"]})
+        todo = [s for s, c in channels.items() if s not in record]
+        if not todo:
+            log(f"{entry['date']}: already queued on {', '.join(sorted(channels))}")
+            continue
+        if not DRY_RUN:
+            for i in range(20):
+                if url_ready(url, entry["size"]):
+                    break
+                time.sleep(15)
+            else:
+                raise SystemExit(f"Video is not reachable at {url}")
+        due = due_time(t)
+        for svc in todo:
+            ch = channels[svc]
+            for flag in ("isDisconnected", "isLocked", "isQueuePaused"):
+                if ch.get(flag):
+                    gh_warning(f"Buffer {svc} channel is {flag[2:]}; the post may not go out.")
+            try:
+                post_id = create_post(ch, entry, url, due)
+            except RuntimeError as exc:
+                failures.append(str(exc))
+                log(f"FAILED {exc}")
+                continue
+            record[svc] = {"buffer_post_id": post_id, "due": due.isoformat(), "queued_at": datetime.now(timezone.utc).isoformat()}
+            log(f"{entry['date']} {svc}: queued {entry['file']} for {due.isoformat()} (post {post_id})")
+    if not DRY_RUN:
+        save_posted(posted)
+    if failures or missing:
+        raise SystemExit("Some posts were not queued: " + "; ".join(failures + [f"{s} not connected" for s in missing]))
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    t = today()
+    posted = load_posted()
+    left = [e for e in SCHEDULE["videos"] if e["date"] >= t.isoformat()]
+    log(f"today {t}, post time {CONFIG['post_time']} {CONFIG['timezone']}, {len(left)} videos left"
+        + (f" (last {left[-1]['date']})" if left else ""))
+    for d in sorted(posted)[-7:]:
+        log(f"  {d}: {', '.join(k for k in posted[d] if k != 'file') or 'nothing'}  {posted[d].get('file')}")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("stage")
+    s.add_argument("--out", default="site")
+    s.add_argument("--local-dir", help="copy from this folder instead of the GitHub release (tests)")
+    sub.add_parser("queue")
+    sub.add_parser("status")
+    args = ap.parse_args()
+    return {"stage": cmd_stage, "queue": cmd_queue, "status": cmd_status}[args.cmd](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
