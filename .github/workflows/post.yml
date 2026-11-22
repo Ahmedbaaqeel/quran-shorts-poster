@@ -13,6 +13,10 @@ on:
         description: "Dry run (send nothing to Buffer)"
         type: boolean
         default: false
+      test_date:
+        description: "Dry runs only: pretend today is this date (YYYY-MM-DD)"
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -39,6 +43,7 @@ jobs:
       - name: Put this week's videos on the Pages site
         env:
           GH_TOKEN: ${{ github.token }}
+          TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
         run: python post.py stage --out site
 
       - uses: actions/configure-pages@v5
@@ -55,6 +60,7 @@ jobs:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           PAGES_URL: ${{ steps.deploy.outputs.page_url }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
         run: python post.py queue
 
       - name: Save the posting log

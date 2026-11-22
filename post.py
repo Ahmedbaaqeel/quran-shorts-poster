@@ -240,7 +240,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
         if not todo:
             log(f"{entry['date']}: already queued on {', '.join(sorted(channels))}")
             continue
-        if not DRY_RUN:
+        if pages:  # also checked on dry runs: it only reads the public link
             for i in range(20):
                 if url_ready(url, entry["size"]):
                     break
