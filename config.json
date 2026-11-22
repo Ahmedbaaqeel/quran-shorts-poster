@@ -1,7 +1,7 @@
 {
   "timezone": "Asia/Riyadh",
   "post_time": "18:00",
-  "platforms": ["instagram", "tiktok"],
+  "platforms": ["tiktok"],
   "thumbnail_offset_ms": 1500,
   "warn_when_days_left": 7
 }
