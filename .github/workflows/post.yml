@@ -55,6 +55,12 @@ jobs:
       - id: deploy
         uses: actions/deploy-pages@v4
 
+      - name: Show Buffer's post format (dry runs only, read-only)
+        if: ${{ inputs.dry_run }}
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+        run: python post.py schema
+
       - name: Queue today's posts in Buffer
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}

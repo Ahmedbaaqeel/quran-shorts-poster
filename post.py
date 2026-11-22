@@ -279,6 +279,31 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+SCHEMA_TYPES = ["CreatePostInput", "AssetInput", "VideoAssetInput", "VideoMetadataInput", "PostInputMetaData",
+                "InstagramPostMetadataInput", "TikTokPostMetadataInput", "ShareMode", "SchedulingType", "PostType",
+                "PostActionPayload", "MutationError", "PostActionSuccess"]
+
+
+def cmd_schema(args: argparse.Namespace) -> int:
+    """Read-only: print Buffer's schema for the types createPost uses."""
+    def tname(t):
+        return t["name"] or f"{t['kind']}({tname(t['ofType'])})"
+    q = """query($n: String!) { __type(name: $n) { kind name
+      inputFields { name type { kind name ofType { kind name ofType { kind name ofType { kind name } } } } }
+      fields { name } enumValues { name } possibleTypes { name } } }"""
+    for n in SCHEMA_TYPES:
+        ty = gql(q, {"n": n})["__type"]
+        if not ty:
+            log(f"{n}: MISSING")
+            continue
+        parts = [f"{f['name']}:{tname(f['type'])}" for f in ty.get("inputFields") or []]
+        parts += [f["name"] for f in ty.get("fields") or []][:12]
+        parts += [e["name"] for e in ty.get("enumValues") or []]
+        parts += ["|" + p["name"] for p in ty.get("possibleTypes") or []]
+        log(f"{n} ({ty['kind']}): " + ", ".join(parts))
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -287,8 +312,9 @@ def main() -> int:
     s.add_argument("--local-dir", help="copy from this folder instead of the GitHub release (tests)")
     sub.add_parser("queue")
     sub.add_parser("status")
+    sub.add_parser("schema")
     args = ap.parse_args()
-    return {"stage": cmd_stage, "queue": cmd_queue, "status": cmd_status}[args.cmd](args)
+    return {"stage": cmd_stage, "queue": cmd_queue, "status": cmd_status, "schema": cmd_schema}[args.cmd](args)
 
 
 if __name__ == "__main__":
