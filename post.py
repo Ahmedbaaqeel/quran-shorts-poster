@@ -19,6 +19,10 @@ Environment:
                    minutes) instead of waiting for its date. It is logged under
                    today's date; run poster_sync.py sync afterwards so the
                    schedule moves the other videos up.
+  FILL_MISSING=1   queue: take the most recently posted video and post it right
+                   away (about 10 minutes) to every platform in config.json it
+                   has not gone to yet, e.g. a newly connected Instagram. The
+                   schedule is not touched.
   BUFFER_API_URL   override the API endpoint (tests only)
   TODAY            override today's date, YYYY-MM-DD (tests only)
 
@@ -47,6 +51,7 @@ POSTED_PATH = ROOT / "posted.json"
 API_URL = os.environ.get("BUFFER_API_URL", "https://api.buffer.com")
 DRY_RUN = os.environ.get("DRY_RUN", "") not in ("", "0", "false")
 POST_NOW = os.environ.get("POST_NOW", "") not in ("", "0", "false")
+FILL_MISSING = os.environ.get("FILL_MISSING", "") not in ("", "0", "false")
 TZ = ZoneInfo(CONFIG["timezone"])
 SERVICES = {"instagram", "tiktok"}
 if hasattr(sys.stdout, "reconfigure"):
@@ -98,6 +103,9 @@ def cmd_stage(args: argparse.Namespace) -> int:
     nxt = next_unposted(load_posted(), t) if POST_NOW else None
     if nxt and nxt not in wanted:
         wanted.append(nxt)
+    if FILL_MISSING:
+        files = {p.get("file") for p in load_posted().values()}
+        wanted += [e for e in SCHEDULE["videos"] if e["file"] in files and e not in wanted]
     (Path(args.out) / "index.html").write_text("<!doctype html><title>quran-shorts</title><p>Video files for the daily poster.</p>\n", encoding="utf-8")
     (Path(args.out) / ".nojekyll").write_text("", encoding="utf-8")
     if not wanted:
@@ -228,7 +236,17 @@ def cmd_queue(args: argparse.Namespace) -> int:
     # A video already posted on another day (for example by a POST_NOW test) never goes out twice.
     todays = [e for e in entries_on(t) if posted.get(e["date"], {}).get("file", e["file"]) == e["file"]
               and not any(p.get("file") == e["file"] for d, p in posted.items() if d != e["date"])]
-    if POST_NOW:
+    if FILL_MISSING:
+        gaps = [d for d in sorted(posted) if any(s not in posted[d] for s in CONFIG["platforms"])]
+        if not gaps:
+            raise SystemExit("FILL_MISSING: every posted video is already on " + ", ".join(CONFIG["platforms"]))
+        d = gaps[-1]
+        src = next((e for e in SCHEDULE["videos"] if e["file"] == posted[d]["file"]), None)
+        if not src:
+            raise SystemExit(f"FILL_MISSING: {posted[d]['file']} is not in schedule.json")
+        log(f"FILL_MISSING: posting {src['file']} (logged {d}) to the platforms it is missing")
+        todays = [{**src, "date": d}]
+    elif POST_NOW:
         nxt = next_unposted(posted, t)
         if posted.get(t.isoformat()):
             raise SystemExit(f"Something was already posted today ({posted[t.isoformat()].get('file')}); not posting another.")
@@ -274,7 +292,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
                 time.sleep(15)
             else:
                 raise SystemExit(f"Video is not reachable at {url}")
-        due = datetime.now(timezone.utc) + timedelta(minutes=10) if POST_NOW else due_time(t)
+        due = datetime.now(timezone.utc) + timedelta(minutes=10) if (POST_NOW or FILL_MISSING) else due_time(t)
         for svc in todo:
             ch = channels[svc]
             for flag in ("isDisconnected", "isLocked", "isQueuePaused"):

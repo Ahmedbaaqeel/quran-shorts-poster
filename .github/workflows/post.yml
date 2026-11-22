@@ -17,6 +17,10 @@ on:
         description: "Post the next unposted video right away (about 10 minutes), for testing"
         type: boolean
         default: false
+      fill_missing:
+        description: "Post the latest posted video to platforms it is missing (e.g. new Instagram), in about 10 minutes"
+        type: boolean
+        default: false
       test_date:
         description: "Dry runs only: pretend today is this date (YYYY-MM-DD)"
         type: string
@@ -48,6 +52,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           POST_NOW: ${{ inputs.post_now && '1' || '' }}
+          FILL_MISSING: ${{ inputs.fill_missing && '1' || '' }}
           TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
         run: python post.py stage --out site
 
@@ -72,6 +77,7 @@ jobs:
           PAGES_URL: ${{ steps.deploy.outputs.page_url }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
           POST_NOW: ${{ inputs.post_now && '1' || '' }}
+          FILL_MISSING: ${{ inputs.fill_missing && '1' || '' }}
           TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
         run: python post.py queue
 
