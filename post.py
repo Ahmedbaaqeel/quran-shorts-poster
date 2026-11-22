@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Daily poster for the quran-shorts videos. Runs on GitHub Actions.
 
-Each day it hands that day's video to Buffer, and Buffer publishes it to
+On each posting day (config.json "post_days") it hands that day's video to Buffer, and Buffer publishes it to
 the connected Instagram and TikTok channels at the configured time. Nothing
 here needs the owner's PC.
 
@@ -15,6 +15,10 @@ Environment:
   BUFFER_API_KEY   Buffer personal API key (GitHub secret)
   PAGES_URL        base URL of the deployed Pages site, e.g. https://me.github.io/repo/
   DRY_RUN=1        print what would be sent, change nothing
+  POST_NOW=1       queue: post the next unposted video right away (in about 10
+                   minutes) instead of waiting for its date. It is logged under
+                   today's date; run poster_sync.py sync afterwards so the
+                   schedule moves the other videos up.
   BUFFER_API_URL   override the API endpoint (tests only)
   TODAY            override today's date, YYYY-MM-DD (tests only)
 
@@ -42,6 +46,7 @@ SCHEDULE = json.loads((ROOT / "schedule.json").read_text(encoding="utf-8"))
 POSTED_PATH = ROOT / "posted.json"
 API_URL = os.environ.get("BUFFER_API_URL", "https://api.buffer.com")
 DRY_RUN = os.environ.get("DRY_RUN", "") not in ("", "0", "false")
+POST_NOW = os.environ.get("POST_NOW", "") not in ("", "0", "false")
 TZ = ZoneInfo(CONFIG["timezone"])
 SERVICES = {"instagram", "tiktok"}
 if hasattr(sys.stdout, "reconfigure"):
@@ -77,6 +82,11 @@ def entries_on(day: date) -> list[dict]:
     return [e for e in SCHEDULE["videos"] if e["date"] == day.isoformat()]
 
 
+def next_unposted(posted: dict, day: date) -> dict | None:
+    done = {p.get("file") for p in posted.values()}
+    return next((e for e in SCHEDULE["videos"] if e["date"] >= day.isoformat() and e["file"] not in done), None)
+
+
 # ---------------------------------------------------------------- stage
 
 def cmd_stage(args: argparse.Namespace) -> int:
@@ -85,6 +95,9 @@ def cmd_stage(args: argparse.Namespace) -> int:
     out.mkdir(parents=True, exist_ok=True)
     t = today()
     wanted = [e for d in (-1, 0, 1) for e in entries_on(t + timedelta(days=d))]
+    nxt = next_unposted(load_posted(), t) if POST_NOW else None
+    if nxt and nxt not in wanted:
+        wanted.append(nxt)
     (Path(args.out) / "index.html").write_text("<!doctype html><title>quran-shorts</title><p>Video files for the daily poster.</p>\n", encoding="utf-8")
     (Path(args.out) / ".nojekyll").write_text("", encoding="utf-8")
     if not wanted:
@@ -211,14 +224,28 @@ def due_time(day: date) -> datetime:
 
 def cmd_queue(args: argparse.Namespace) -> int:
     t = today()
-    todays = entries_on(t)
     posted = load_posted()
+    # A video already posted on another day (for example by a POST_NOW test) never goes out twice.
+    todays = [e for e in entries_on(t) if posted.get(e["date"], {}).get("file", e["file"]) == e["file"]
+              and not any(p.get("file") == e["file"] for d, p in posted.items() if d != e["date"])]
+    if POST_NOW:
+        nxt = next_unposted(posted, t)
+        if posted.get(t.isoformat()):
+            raise SystemExit(f"Something was already posted today ({posted[t.isoformat()].get('file')}); not posting another.")
+        if not nxt:
+            raise SystemExit("POST_NOW: no unposted video left in the schedule.")
+        log(f"POST_NOW: posting {nxt['file']} (scheduled {nxt['date']}) now, logged under {t}")
+        todays = [{**nxt, "date": t.isoformat()}]
     left = [e for e in SCHEDULE["videos"] if e["date"] >= t.isoformat()]
     if len(left) <= CONFIG.get("warn_when_days_left", 7):
         gh_warning(f"Only {len(left)} videos left in the schedule (last: {left[-1]['date'] if left else 'none'}). "
                    "Render more on the PC and run poster_sync.py.")
     if not todays:
-        gh_warning(f"Nothing scheduled for {t}.")
+        post_days = [d[:3].lower() for d in CONFIG.get("post_days", [])]
+        if post_days and t.strftime("%a").lower() not in post_days:
+            log(f"{t} is not a posting day ({', '.join(post_days)}). Nothing to do.")
+        else:
+            gh_warning(f"Nothing scheduled for {t}.")
         return 0
 
     pages = os.environ.get("PAGES_URL", "").rstrip("/")
@@ -247,7 +274,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
                 time.sleep(15)
             else:
                 raise SystemExit(f"Video is not reachable at {url}")
-        due = due_time(t)
+        due = datetime.now(timezone.utc) + timedelta(minutes=10) if POST_NOW else due_time(t)
         for svc in todo:
             ch = channels[svc]
             for flag in ("isDisconnected", "isLocked", "isQueuePaused"):
