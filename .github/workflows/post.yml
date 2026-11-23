@@ -1,12 +1,15 @@
 name: Daily post
 
 # Runs on GitHub's servers, so the owner's PC can be off.
-# 13:00 and 14:00 UTC = 16:00 and 17:00 in Riyadh, before the 18:00 post time
-# in config.json. The second run only retries what the first one missed.
+# 12:17, 13:23 and 14:41 UTC = 15:17, 16:23 and 17:41 in Riyadh, before the 18:00
+# post time in config.json. Later runs only retry what an earlier one missed.
+# Off the hour on purpose: GitHub drops scheduled runs at busy times, and on
+# 2026-11-23 both on-the-hour runs (13:00, 14:00) never started.
 on:
   schedule:
-    - cron: "0 13 * * *"
-    - cron: "0 14 * * *"
+    - cron: "17 12 * * *"
+    - cron: "23 13 * * *"
+    - cron: "41 14 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
