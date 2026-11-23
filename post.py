@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Daily poster for the quran-shorts videos. Runs on GitHub Actions.
 
-On each posting day (config.json "post_days") it hands that day's video to Buffer, and Buffer publishes it to
-the connected Instagram and TikTok channels at the configured time. Nothing
-here needs the owner's PC.
+Each run keeps the next config.json "queue_ahead" scheduled videos queued in
+Buffer, each for its own posting day (config.json "post_days") at the
+configured time. Buffer then publishes them to the connected Instagram and
+TikTok channels, so a few missed GitHub runs never stop a post. Nothing here
+needs the owner's PC.
 
 Commands:
-  python post.py stage --out site      put the videos for yesterday, today and
-                                       tomorrow into site/v/ (the Pages site)
-  python post.py queue                 create today's Buffer posts
+  python post.py stage --out site      put the videos for yesterday, today,
+                                       tomorrow and the queue_ahead window
+                                       into site/v/ (the Pages site)
+  python post.py queue                 create the Buffer posts for the next
+                                       queue_ahead videos not yet queued
   python post.py status                print what is scheduled and what is left
 
 Environment:
@@ -87,6 +91,12 @@ def entries_on(day: date) -> list[dict]:
     return [e for e in SCHEDULE["videos"] if e["date"] == day.isoformat()]
 
 
+def upcoming(day: date) -> list[dict]:
+    """The next queue_ahead scheduled videos from day on (Buffer free plan allows 10 per channel)."""
+    ahead = max(1, int(CONFIG.get("queue_ahead", 1)))
+    return [e for e in SCHEDULE["videos"] if e["date"] >= day.isoformat()][:ahead]
+
+
 def next_unposted(posted: dict, day: date) -> dict | None:
     done = {p.get("file") for p in posted.values()}
     return next((e for e in SCHEDULE["videos"] if e["date"] >= day.isoformat() and e["file"] not in done), None)
@@ -100,6 +110,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
     out.mkdir(parents=True, exist_ok=True)
     t = today()
     wanted = [e for d in (-1, 0, 1) for e in entries_on(t + timedelta(days=d))]
+    wanted += [e for e in upcoming(t) if e not in wanted]
     nxt = next_unposted(load_posted(), t) if POST_NOW else None
     if nxt and nxt not in wanted:
         wanted.append(nxt)
@@ -234,7 +245,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
     t = today()
     posted = load_posted()
     # A video already posted on another day (for example by a POST_NOW test) never goes out twice.
-    todays = [e for e in entries_on(t) if posted.get(e["date"], {}).get("file", e["file"]) == e["file"]
+    todays = [e for e in upcoming(t) if posted.get(e["date"], {}).get("file", e["file"]) == e["file"]
               and not any(p.get("file") == e["file"] for d, p in posted.items() if d != e["date"])]
     if FILL_MISSING:
         gaps = [d for d in sorted(posted) if any(s not in posted[d] for s in CONFIG["platforms"])]
@@ -292,7 +303,8 @@ def cmd_queue(args: argparse.Namespace) -> int:
                 time.sleep(15)
             else:
                 raise SystemExit(f"Video is not reachable at {url}")
-        due = datetime.now(timezone.utc) + timedelta(minutes=10) if (POST_NOW or FILL_MISSING) else due_time(t)
+        due = (datetime.now(timezone.utc) + timedelta(minutes=10) if (POST_NOW or FILL_MISSING)
+               else due_time(date.fromisoformat(entry["date"])))
         for svc in todo:
             ch = channels[svc]
             for flag in ("isDisconnected", "isLocked", "isQueuePaused"):
