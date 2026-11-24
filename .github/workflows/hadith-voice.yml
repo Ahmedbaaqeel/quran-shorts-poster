@@ -4,7 +4,7 @@ name: Hadith voice-over
 on:
   push:
     branches: ["claude/**"]
-    paths: ["hadith-voice/*.py", "hadith-voice/run.txt"]
+    paths: ["hadith-voice/*.py", "hadith-voice/run.txt", "hadith-voice/narration.txt"]
   workflow_dispatch:
 permissions:
   contents: write
@@ -19,7 +19,7 @@ jobs:
           OUT_DIR: hadith-voice/out
         run: |
           if [ -z "$ELEVENLABS_API_KEY" ]; then echo "::warning::ELEVENLABS_API_KEY secret is not set"; exit 0; fi
-          python3 hadith-voice/eleven_voice.py
+          python3 hadith-voice/${SCRIPT:-eleven_design.py}
       - name: Commit audio
         run: |
           git config user.name "github-actions[bot]"
