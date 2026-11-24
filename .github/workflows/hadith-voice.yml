@@ -19,7 +19,7 @@ jobs:
           OUT_DIR: hadith-voice/out
         run: |
           if [ -z "$ELEVENLABS_API_KEY" ]; then echo "::warning::ELEVENLABS_API_KEY secret is not set"; exit 0; fi
-          python3 hadith-voice/${SCRIPT:-eleven_one.py}
+          python3 hadith-voice/$(cat hadith-voice/script.txt 2>/dev/null || echo eleven_one.py)
       - name: Commit audio
         run: |
           git config user.name "github-actions[bot]"
