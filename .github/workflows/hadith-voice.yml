@@ -4,7 +4,7 @@ name: Hadith voice-over
 on:
   push:
     branches: ["claude/**"]
-    paths: ["hadith-voice/*.py", "hadith-voice/run.txt", "hadith-voice/narration.txt"]
+    paths: ["hadith-voice/run.txt"]  # only an explicit run request; voices cost credits
   workflow_dispatch:
 permissions:
   contents: write
