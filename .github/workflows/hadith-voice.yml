@@ -1,0 +1,30 @@
+name: Hadith voice-over
+# Makes the ElevenLabs narration for a hadith video and commits the audio back
+# to this branch. Runs when hadith-voice/ changes on a claude/ branch, or by hand.
+on:
+  push:
+    branches: ["claude/**"]
+    paths: ["hadith-voice/run.txt"]  # only an explicit run request; voices cost credits
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  voice:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate narration
+        env:
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          OUT_DIR: hadith-voice/out
+        run: |
+          if [ -z "$ELEVENLABS_API_KEY" ]; then echo "::warning::ELEVENLABS_API_KEY secret is not set"; exit 0; fi
+          python3 hadith-voice/$(cat hadith-voice/script.txt 2>/dev/null || echo eleven_one.py)
+      - name: Commit audio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898732+github-actions[bot]@users.noreply.github.com"
+          git add hadith-voice/out || true
+          git diff --cached --quiet && exit 0
+          git commit -m "Hadith voice-over output [skip ci]"
+          git push
