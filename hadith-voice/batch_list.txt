@@ -1,7 +1,1 @@
-niyyat
-ghars
-yuhibb
-khayran
-shadid
-talq
-salima
+# names of narrations to record (batch/<name>.txt). Week 1 is recorded.
