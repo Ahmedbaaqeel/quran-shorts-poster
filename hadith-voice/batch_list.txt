@@ -1,1 +1,8 @@
-# names of narrations to record (batch/<name>.txt). Week 1 is recorded.
+# week 3
+nuzul
+hawqala
+jamaa
+qulub
+kalb
+ghusn
+yarham
