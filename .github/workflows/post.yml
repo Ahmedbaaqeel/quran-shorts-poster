@@ -59,6 +59,13 @@ jobs:
           TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
         run: python post.py stage --out site
 
+      - name: Put the Haditho_97 videos on the Pages site
+        continue-on-error: true  # a hadith problem must never stop the quran posts
+        env:
+          ACCOUNT: hadith
+          TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
+        run: python post.py stage --out site --local-dir hadith/videos
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
@@ -84,14 +91,26 @@ jobs:
           TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
         run: python post.py queue
 
+      - name: Queue today's Haditho_97 posts in Buffer
+        if: ${{ always() && steps.deploy.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          ACCOUNT: hadith
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          PAGES_URL: ${{ steps.deploy.outputs.page_url }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
+        run: python post.py queue
+
       - name: Save the posting log
         if: always()
         run: |
           python post.py status
-          if [ -n "$(git status --porcelain posted.json)" ]; then
+          ACCOUNT=hadith python post.py status
+          if [ -n "$(git status --porcelain posted.json hadith/posted.json)" ]; then
             git config user.name "quran-shorts poster"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add posted.json
+            git add posted.json hadith/posted.json
             git commit -m "Posting log $(date -u +%F)"
             git push
           fi
