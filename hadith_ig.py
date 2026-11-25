@@ -16,6 +16,8 @@ Environment:
   IG_ACCESS_TOKEN  Instagram user access token (GitHub secret)
   DRY_RUN=1        post: print what would happen, publish nothing
   POST_NOW=1       post: publish the next unposted video right away (tests)
+  POST_FILE=x.mp4  post: publish this scheduled video right away, logged under
+                   its own date (remove its Buffer post first)
   MAX_WAIT_MIN     post: if started before post time, wait up to this many
                    minutes for it (default 45)
   TODAY            override today's date, YYYY-MM-DD (tests only)
@@ -227,7 +229,15 @@ def cmd_post() -> int:
     t = today()
     posted = load_posted()
     done_files = {p.get("file") for d, p in posted.items() if already_on_instagram(p)}
-    if POST_NOW:
+    post_file = os.environ.get("POST_FILE", "").strip()
+    if post_file:
+        entry = next((e for e in SCHEDULE["videos"] if e["file"] == post_file), None)
+        if not entry:
+            raise SystemExit(f"POST_FILE: {post_file} is not in hadith/schedule.json")
+        if PLATFORM in posted.get(entry["date"], {}):
+            raise SystemExit(f"POST_FILE: {post_file} was already published directly; not posting it twice.")
+        log(f"POST_FILE: publishing {post_file} (scheduled {entry['date']}) right now")
+    elif POST_NOW:
         entry = next((e for e in SCHEDULE["videos"] if e["date"] >= t.isoformat() and e["file"] not in done_files), None)
         if not entry:
             raise SystemExit("POST_NOW: no unposted video left in the schedule.")

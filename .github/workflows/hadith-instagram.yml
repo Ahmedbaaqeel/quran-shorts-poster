@@ -19,6 +19,10 @@ on:
         type: choice
         options: [check, post, post_now]
         default: check
+      file:
+        description: "post_now only: publish this video from hadith/videos (e.g. hadith-tamra-v4.mp4) instead of the next one"
+        type: string
+        default: ""
       dry_run:
         description: "Dry run (publish nothing)"
         type: boolean
@@ -54,6 +58,7 @@ jobs:
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
           POST_NOW: ${{ inputs.action == 'post_now' && '1' || '' }}
+          POST_FILE: ${{ inputs.action == 'post_now' && inputs.file || '' }}
           VIDEO_BASE_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/hadith/videos
         run: python hadith_ig.py post
 
