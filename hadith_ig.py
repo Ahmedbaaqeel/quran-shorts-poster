@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Post the Haditho_97 videos straight to Instagram with Meta's own API.
 
-No Buffer and no third-party service: GitHub Actions calls the official
-"Instagram API with Instagram Login" (graph.instagram.com) at post time.
+No Buffer and no third-party service: GitHub Actions calls Meta's official
+Instagram API (Facebook login setup, graph.facebook.com) at post time.
+IG_ACCESS_TOKEN is the access token of the Facebook Page that Haditho_97 is
+linked to. A Page token made from a long-lived user token does not expire.
 
 Commands:
   python hadith_ig.py check     read-only: show which account the token belongs to
                                 and how many posts it may still publish today
   python hadith_ig.py post      publish today's video from hadith/schedule.json
                                 once it is post time (hadith/config.json "post_time")
-  python hadith_ig.py refresh   renew the 60-day token and print the new expiry
 
 Environment:
   IG_ACCESS_TOKEN  Instagram user access token (GitHub secret)
@@ -41,8 +42,8 @@ CONFIG = json.loads((DATA / "config.json").read_text(encoding="utf-8"))
 SCHEDULE = json.loads((DATA / "schedule.json").read_text(encoding="utf-8"))
 POSTED_PATH = DATA / "posted.json"
 TZ = ZoneInfo(CONFIG["timezone"])
-API_VERSION = CONFIG.get("ig_api_version", "v24.0")
-GRAPH = f"https://graph.instagram.com/{API_VERSION}"
+API_VERSION = CONFIG.get("ig_api_version", "v25.0")
+GRAPH = f"https://graph.facebook.com/{API_VERSION}"
 RUPLOAD = f"https://rupload.facebook.com/ig-api-upload/{API_VERSION}"
 DRY_RUN = os.environ.get("DRY_RUN", "") not in ("", "0", "false")
 POST_NOW = os.environ.get("POST_NOW", "") not in ("", "0", "false")
@@ -109,14 +110,19 @@ def request(method: str, url: str, params: dict | None = None, data: bytes | Non
 
 
 def me() -> dict:
-    return request("GET", f"{GRAPH}/me", {"fields": "user_id,username,account_type", "access_token": token()})
+    """The Instagram account linked to the token's Facebook Page: {"user_id", "username"}."""
+    page = request("GET", f"{GRAPH}/me", {"fields": "name,instagram_business_account{id,username}", "access_token": token()})
+    ig = page.get("instagram_business_account")
+    if not ig:
+        raise SystemExit(f"The token's Page ({page.get('name')}) has no linked Instagram professional account.")
+    return {"user_id": ig["id"], "username": ig.get("username", ""), "page": page.get("name"), "account_type": "page-linked"}
 
 
 # ---------------------------------------------------------------- check
 
 def cmd_check() -> int:
     info = me()
-    log(f"Token belongs to @{info.get('username')} (id {info.get('user_id')}, {info.get('account_type')})")
+    log(f"Token is for Page '{info.get('page')}', Instagram @{info.get('username')} (id {info.get('user_id')})")
     want = str(CONFIG.get("channel_names", {}).get("instagram", "")).lower()
     if want and str(info.get("username", "")).lower() != want:
         raise SystemExit(f"This token is for @{info.get('username')}, not @{want}.")
@@ -126,23 +132,6 @@ def cmd_check() -> int:
         log(f"Publishing limit: {json.dumps(lim.get('data', lim))}")
     except RuntimeError as exc:
         log(f"(could not read the publishing limit: {exc})")
-    return 0
-
-
-# ---------------------------------------------------------------- refresh
-
-def cmd_refresh() -> int:
-    """Long-lived tokens last 60 days; refreshing (allowed once the token is a day old) restarts the 60 days."""
-    res = request("GET", "https://graph.instagram.com/refresh_access_token",
-                  {"grant_type": "ig_refresh_token", "access_token": token()})
-    new = res.get("access_token", "")
-    days = int(res.get("expires_in", 0)) // 86400
-    if not new:
-        raise SystemExit(f"Refresh failed: {res}")
-    out = os.environ.get("NEW_TOKEN_FILE")
-    if out:  # the workflow saves it back into the secret; it is never printed
-        Path(out).write_text(new, encoding="utf-8")
-    log(f"Token refreshed, valid for {days} more days (until about {(date.today() + timedelta(days=days)).isoformat()}).")
     return 0
 
 
@@ -286,7 +275,7 @@ def cmd_post() -> int:
 
 def main() -> int:
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    cmds = {"check": cmd_check, "post": cmd_post, "refresh": cmd_refresh}
+    cmds = {"check": cmd_check, "post": cmd_post}
     if cmd not in cmds:
         raise SystemExit(f"usage: python hadith_ig.py {'|'.join(cmds)}")
     return cmds[cmd]()
