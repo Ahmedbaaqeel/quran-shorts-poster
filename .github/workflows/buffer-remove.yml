@@ -1,0 +1,37 @@
+name: Remove a Buffer post
+
+# Removes one queued post from Buffer by its id (see hadith/posted.json,
+# "buffer_post_id"), e.g. when a video was already posted another way.
+on:
+  workflow_dispatch:
+    inputs:
+      post_id:
+        description: "Buffer post id"
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Remove the post
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_POST_ID: ${{ inputs.post_id }}
+        run: python buffer_remove.py
+      - name: Save the posting log
+        run: |
+          if [ -n "$(git status --porcelain hadith/posted.json)" ]; then
+            git config user.name "quran-shorts poster"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add hadith/posted.json
+            git commit -m "Haditho_97: Buffer post ${{ inputs.post_id }} removed"
+            git push
+          fi

@@ -27,6 +27,7 @@ Environment:
                    away (about 10 minutes) to every platform in config.json it
                    has not gone to yet, e.g. a newly connected Instagram. The
                    schedule is not touched.
+  ACCOUNT=hadith   use the files in hadith/ (Haditho_97) instead of the top level
   BUFFER_API_URL   override the API endpoint (tests only)
   TODAY            override today's date, YYYY-MM-DD (tests only)
 
@@ -49,9 +50,13 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent
-CONFIG = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
-SCHEDULE = json.loads((ROOT / "schedule.json").read_text(encoding="utf-8"))
-POSTED_PATH = ROOT / "posted.json"
+# ACCOUNT=hadith reads hadith/config.json, hadith/schedule.json and hadith/posted.json
+# (the Haditho_97 account). No ACCOUNT = the original quran-shorts files at the top level.
+ACCOUNT = os.environ.get("ACCOUNT", "").strip()
+DATA = ROOT / ACCOUNT if ACCOUNT else ROOT
+CONFIG = json.loads((DATA / "config.json").read_text(encoding="utf-8"))
+SCHEDULE = json.loads((DATA / "schedule.json").read_text(encoding="utf-8"))
+POSTED_PATH = DATA / "posted.json"
 API_URL = os.environ.get("BUFFER_API_URL", "https://api.buffer.com")
 DRY_RUN = os.environ.get("DRY_RUN", "") not in ("", "0", "false")
 POST_NOW = os.environ.get("POST_NOW", "") not in ("", "0", "false")
@@ -165,6 +170,24 @@ def gql(query: str, variables: dict | None = None) -> dict:
     raise SystemExit("Buffer API kept failing")
 
 
+def _norm(name: str) -> str:
+    return str(name or "").strip().lstrip("@").lower()
+
+
+def channel_wanted(svc: str, name: str) -> bool:
+    """config.json "channel_names" pins a platform to one Buffer channel by name.
+    Without a pin, channels pinned by another account's folder (e.g. hadith/ for
+    Haditho_97) are left alone, so the quran posts never go to the hadith account."""
+    pinned = CONFIG.get("channel_names", {}).get(svc)
+    if pinned:
+        return _norm(name) == _norm(pinned)
+    taken = set()
+    for other in ROOT.glob("*/config.json"):
+        if other.parent != DATA:
+            taken |= {_norm(n) for n in json.loads(other.read_text(encoding="utf-8")).get("channel_names", {}).values()}
+    return _norm(name) not in taken
+
+
 def find_channels() -> dict[str, dict]:
     """Return {"instagram": channel, "tiktok": channel} from the Buffer account."""
     orgs = gql("query { account { organizations { id name } } }")["account"]["organizations"]
@@ -174,7 +197,7 @@ def find_channels() -> dict[str, dict]:
                     "{ id name service isDisconnected isLocked isQueuePaused } }", {"org": org["id"]})["channels"]
         for c in chans:
             svc = str(c.get("service", "")).lower()
-            if svc in SERVICES and svc in CONFIG["platforms"] and svc not in found:
+            if svc in SERVICES and svc in CONFIG["platforms"] and svc not in found and channel_wanted(svc, c.get("name")):
                 found[svc] = c
     return found
 
@@ -278,7 +301,10 @@ def cmd_queue(args: argparse.Namespace) -> int:
         return 0
 
     pages = os.environ.get("PAGES_URL", "").rstrip("/")
-    if not pages and not DRY_RUN:
+    # VIDEO_BASE_URL: serve the files from elsewhere (e.g. raw.githubusercontent.com
+    # for hadith/videos) when the Pages deploy failed.
+    video_base = os.environ.get("VIDEO_BASE_URL", "").rstrip("/") or (f"{pages}/v" if pages else "")
+    if not video_base and not DRY_RUN:
         raise SystemExit("PAGES_URL is not set")
 
     channels = {} if DRY_RUN and not os.environ.get("BUFFER_API_KEY") else find_channels()
@@ -290,13 +316,13 @@ def cmd_queue(args: argparse.Namespace) -> int:
 
     failures = []
     for entry in todays:
-        url = f"{pages}/v/{entry['file']}"
+        url = f"{video_base}/{entry['file']}"
         record = posted.setdefault(entry["date"], {"file": entry["file"]})
         todo = [s for s, c in channels.items() if s not in record]
         if not todo:
             log(f"{entry['date']}: already queued on {', '.join(sorted(channels))}")
             continue
-        if pages:  # also checked on dry runs: it only reads the public link
+        if video_base:  # also checked on dry runs: it only reads the public link
             for i in range(20):
                 if url_ready(url, entry["size"]):
                     break

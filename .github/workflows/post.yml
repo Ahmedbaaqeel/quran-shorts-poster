@@ -65,8 +65,23 @@ jobs:
         with:
           path: site
 
-      - id: deploy
+      # deploy-pages sometimes looks for the artifact before GitHub lists it
+      # ("Found 0 artifact(s)", runs 12 and 13). Wait and try once more.
+      - id: deploy1
+        continue-on-error: true
         uses: actions/deploy-pages@v4
+
+      - name: Wait before retrying the Pages deploy
+        if: ${{ steps.deploy1.outcome == 'failure' }}
+        run: sleep 45
+
+      - id: deploy2
+        if: ${{ steps.deploy1.outcome == 'failure' }}
+        uses: actions/deploy-pages@v4
+
+      - id: deploy
+        if: ${{ steps.deploy1.outcome == 'success' || steps.deploy2.outcome == 'success' }}
+        run: echo "page_url=${{ steps.deploy1.outputs.page_url || steps.deploy2.outputs.page_url }}" >> "$GITHUB_OUTPUT"
 
       - name: Show Buffer's post format (dry runs only, read-only)
         if: ${{ inputs.dry_run }}
@@ -84,14 +99,17 @@ jobs:
           TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
         run: python post.py queue
 
+      # Haditho_97 now posts straight to Instagram: see hadith-instagram.yml.
+
       - name: Save the posting log
         if: always()
         run: |
           python post.py status
-          if [ -n "$(git status --porcelain posted.json)" ]; then
+          ACCOUNT=hadith python post.py status
+          if [ -n "$(git status --porcelain posted.json hadith/posted.json)" ]; then
             git config user.name "quran-shorts poster"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add posted.json
+            git add posted.json hadith/posted.json
             git commit -m "Posting log $(date -u +%F)"
             git push
           fi
