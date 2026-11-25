@@ -1,0 +1,70 @@
+name: Haditho_97 Instagram (direct)
+
+# Posts the day's Haditho_97 video straight to Instagram with Meta's own API
+# (no Buffer). Runs on GitHub's servers, so no PC is needed.
+# 15:00 UTC = 18:00 Riyadh. The first run starts a little early and waits for
+# 18:00; the later runs only post if an earlier one missed. Off the hour on
+# purpose: GitHub drops or delays scheduled runs at busy times.
+on:
+  schedule:
+    - cron: "38 14 * * *"
+    - cron: "51 14 * * *"
+    - cron: "13 15 * * *"
+    - cron: "47 15 * * *"
+    - cron: "29 17 * * *"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "check = test the token only, post = today's video at post time, post_now = next unposted video right now"
+        type: choice
+        options: [check, post, post_now]
+        default: check
+      dry_run:
+        description: "Dry run (publish nothing)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hadith-instagram
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the Instagram token
+        if: ${{ inputs.action == 'check' }}
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+        run: python hadith_ig.py check
+
+      - name: Publish today's Haditho_97 Reel
+        if: ${{ inputs.action != 'check' }}
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          POST_NOW: ${{ inputs.action == 'post_now' && '1' || '' }}
+          VIDEO_BASE_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/hadith/videos
+        run: python hadith_ig.py post
+
+      - name: Save the posting log
+        if: always()
+        run: |
+          ACCOUNT=hadith python post.py status
+          if [ -n "$(git status --porcelain hadith/posted.json)" ]; then
+            git config user.name "quran-shorts poster"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add hadith/posted.json
+            git commit -m "Haditho_97 Instagram log $(date -u +%F)"
+            for i in 1 2 3; do git pull --rebase -q && git push && break; sleep 10; done
+          fi

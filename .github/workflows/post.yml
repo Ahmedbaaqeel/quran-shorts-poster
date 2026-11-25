@@ -59,13 +59,6 @@ jobs:
           TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
         run: python post.py stage --out site
 
-      - name: Put the Haditho_97 videos on the Pages site
-        continue-on-error: true  # a hadith problem must never stop the quran posts
-        env:
-          ACCOUNT: hadith
-          TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
-        run: python post.py stage --out site --local-dir hadith/videos
-
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
@@ -106,19 +99,7 @@ jobs:
           TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
         run: python post.py queue
 
-      # Runs even when Pages is down: the hadith videos are in the repo, so they
-      # are then served from raw.githubusercontent.com at this exact commit.
-      - name: Queue today's Haditho_97 posts in Buffer
-        if: ${{ always() }}
-        continue-on-error: true
-        env:
-          ACCOUNT: hadith
-          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
-          PAGES_URL: ${{ steps.deploy.outputs.page_url }}
-          VIDEO_BASE_URL: ${{ steps.deploy.outputs.page_url == '' && format('https://raw.githubusercontent.com/{0}/{1}/hadith/videos', github.repository, github.sha) || '' }}
-          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
-          TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
-        run: python post.py queue
+      # Haditho_97 now posts straight to Instagram: see hadith-instagram.yml.
 
       - name: Save the posting log
         if: always()
