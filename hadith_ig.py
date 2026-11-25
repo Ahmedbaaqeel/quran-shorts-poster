@@ -118,10 +118,29 @@ def me() -> dict:
     return {"user_id": ig["id"], "username": ig.get("username", ""), "page": page.get("name"), "account_type": "page-linked"}
 
 
+def warn_if_access_ending() -> None:
+    """Meta needs the Facebook owner to log in to the app about every 90 days ("data access")."""
+    try:
+        d = request("GET", f"{GRAPH}/debug_token", {"input_token": token(), "access_token": token()}).get("data", {})
+    except RuntimeError as exc:
+        log(f"(could not read the token's expiry: {exc})")
+        return
+    for key, what in (("expires_at", "The token"), ("data_access_expires_at", "Meta data access")):
+        ts = int(d.get(key) or 0)
+        if not ts:
+            continue
+        left = (datetime.fromtimestamp(ts, timezone.utc) - datetime.now(timezone.utc)).days
+        log(f"{what} runs out on {datetime.fromtimestamp(ts, timezone.utc).date()} ({left} days)")
+        if left <= 14:
+            gh_warning(f"{what} for Haditho_97 runs out in {left} days. Open the app in Meta's Graph API Explorer and "
+                       "generate the token again, then update IG_ACCESS_TOKEN.")
+
+
 # ---------------------------------------------------------------- check
 
 def cmd_check() -> int:
     info = me()
+    warn_if_access_ending()
     log(f"Token is for Page '{info.get('page')}', Instagram @{info.get('username')} (id {info.get('user_id')})")
     want = str(CONFIG.get("channel_names", {}).get("instagram", "")).lower()
     if want and str(info.get("username", "")).lower() != want:
@@ -241,6 +260,7 @@ def cmd_post() -> int:
         return 0
 
     info = me()
+    warn_if_access_ending()
     uid = info["user_id"]
     want = str(CONFIG.get("channel_names", {}).get("instagram", "")).lower()
     if want and str(info.get("username", "")).lower() != want:
