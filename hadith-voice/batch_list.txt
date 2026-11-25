@@ -1,1 +1,8 @@
-# names of narrations to record (batch/<name>.txt). Week 1 is recorded.
+# week 2
+salak
+quran
+yassiru
+naqasat
+gharib
+ajaban
+sajid
