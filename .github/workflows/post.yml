@@ -106,13 +106,16 @@ jobs:
           TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
         run: python post.py queue
 
+      # Runs even when Pages is down: the hadith videos are in the repo, so they
+      # are then served from raw.githubusercontent.com at this exact commit.
       - name: Queue today's Haditho_97 posts in Buffer
-        if: ${{ always() && steps.deploy.outcome == 'success' }}
+        if: ${{ always() }}
         continue-on-error: true
         env:
           ACCOUNT: hadith
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           PAGES_URL: ${{ steps.deploy.outputs.page_url }}
+          VIDEO_BASE_URL: ${{ steps.deploy.outputs.page_url == '' && format('https://raw.githubusercontent.com/{0}/{1}/hadith/videos', github.repository, github.sha) || '' }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
           TODAY: ${{ inputs.dry_run && inputs.test_date || '' }}
         run: python post.py queue

@@ -301,7 +301,10 @@ def cmd_queue(args: argparse.Namespace) -> int:
         return 0
 
     pages = os.environ.get("PAGES_URL", "").rstrip("/")
-    if not pages and not DRY_RUN:
+    # VIDEO_BASE_URL: serve the files from elsewhere (e.g. raw.githubusercontent.com
+    # for hadith/videos) when the Pages deploy failed.
+    video_base = os.environ.get("VIDEO_BASE_URL", "").rstrip("/") or (f"{pages}/v" if pages else "")
+    if not video_base and not DRY_RUN:
         raise SystemExit("PAGES_URL is not set")
 
     channels = {} if DRY_RUN and not os.environ.get("BUFFER_API_KEY") else find_channels()
@@ -313,13 +316,13 @@ def cmd_queue(args: argparse.Namespace) -> int:
 
     failures = []
     for entry in todays:
-        url = f"{pages}/v/{entry['file']}"
+        url = f"{video_base}/{entry['file']}"
         record = posted.setdefault(entry["date"], {"file": entry["file"]})
         todo = [s for s, c in channels.items() if s not in record]
         if not todo:
             log(f"{entry['date']}: already queued on {', '.join(sorted(channels))}")
             continue
-        if pages:  # also checked on dry runs: it only reads the public link
+        if video_base:  # also checked on dry runs: it only reads the public link
             for i in range(20):
                 if url_ready(url, entry["size"]):
                     break
