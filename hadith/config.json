@@ -1,0 +1,14 @@
+{
+  "timezone": "Asia/Riyadh",
+  "post_time": "18:00",
+  "post_days": [],
+  "queue_ahead": 3,
+  "platforms": [
+    "instagram"
+  ],
+  "channel_names": {
+    "instagram": "haditho_97"
+  },
+  "thumbnail_offset_ms": 1500,
+  "warn_when_days_left": 0
+}
