@@ -1,0 +1,41 @@
+name: Haditho_97 token refresh
+
+# The Instagram token lasts 60 days. Every Monday this renews it and saves the
+# new one back into the IG_ACCESS_TOKEN secret, so it never runs out.
+# Saving a secret needs the GH_PAT secret: a fine-grained GitHub token for this
+# repository with "Secrets: Read and write". Without it, the run only warns.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Renew the token
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          NEW_TOKEN_FILE: ${{ runner.temp }}/ig_token
+        run: python hadith_ig.py refresh
+
+      - name: Save it into the IG_ACCESS_TOKEN secret
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TOKEN_FILE: ${{ runner.temp }}/ig_token
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::GH_PAT is not set, so the renewed token was not saved. Add GH_PAT, or renew IG_ACCESS_TOKEN by hand before it expires."
+            exit 0
+          fi
+          gh secret set IG_ACCESS_TOKEN --repo "$GITHUB_REPOSITORY" < "$TOKEN_FILE"
+          echo "Saved the renewed token."
