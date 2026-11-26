@@ -1,7 +1,6 @@
-# week 5
-masjid
-inqata
-bunyan
-yad
-ihris
-bardayn
+# new scenes (Jos 2026-11-26)
+fajr
+abwab
+ghayb
+tawba
+jarra
