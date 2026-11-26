@@ -1,0 +1,34 @@
+name: Buffer audit (Haditho_97)
+
+# Read-only by default: lists what Buffer holds for haditho_97 and the last
+# posts on the Instagram account. "clear" deletes every still-queued
+# haditho_97 Buffer post (the account now posts through hadith-instagram.yml).
+on:
+  workflow_dispatch:
+    inputs:
+      clear:
+        description: "Delete every queued haditho_97 post in Buffer"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Last posts on Instagram
+        continue-on-error: true
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+        run: python hadith_ig.py recent
+      - name: Buffer queue for haditho_97
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          CLEAR: ${{ inputs.clear && '1' || '' }}
+        run: python buffer_audit.py
