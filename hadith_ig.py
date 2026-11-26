@@ -303,9 +303,18 @@ def cmd_post() -> int:
     return 0
 
 
+def cmd_recent() -> int:
+    info = me()
+    res = request("GET", f"{GRAPH}/{info['user_id']}/media",
+                  {"fields": "timestamp,media_type,caption,permalink", "limit": 10, "access_token": token()})
+    for m in res.get("data", []):
+        log(f"{m.get('timestamp')}  {m.get('media_type')}  {m.get('permalink')}  {(m.get('caption') or '')[:50]!r}")
+    return 0
+
+
 def main() -> int:
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    cmds = {"check": cmd_check, "post": cmd_post}
+    cmds = {"check": cmd_check, "post": cmd_post, "recent": cmd_recent}
     if cmd not in cmds:
         raise SystemExit(f"usage: python hadith_ig.py {'|'.join(cmds)}")
     return cmds[cmd]()
