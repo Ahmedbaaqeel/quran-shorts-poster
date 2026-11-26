@@ -1,7 +1,2 @@
-# week 5
-masjid
-inqata
-bunyan
-yad
-ihris
-bardayn
+# cat hadith (Jos 2026-11-27)
+hirra
