@@ -39,6 +39,8 @@ TZ = post.TZ
 NOW = datetime.now(timezone.utc)
 TODAY = NOW.astimezone(TZ).date()
 HEALTH = post.DATA / "health.json"
+# Posts queued before this went through the old shared Buffer account, which this key cannot see.
+HADITH_BUFFER_SINCE = datetime(2026, 11, 27, tzinfo=timezone.utc)
 ALLOWED_LATIN = {"Haditho_97", "Shorts"}
 WANTED_FIELDS = ["id", "status", "dueAt", "sentAt", "createdAt", "text", "externalLink", "error", "errorMessage"]
 
@@ -207,7 +209,7 @@ def check(final: bool) -> dict:
     known = {}
     for key, rec in posted.items():
         ig = rec.get("instagram")
-        if isinstance(ig, dict) and ig.get("buffer_post_id"):
+        if isinstance(ig, dict) and ig.get("buffer_post_id") and (ts(ig.get("queued_at")) or NOW) >= HADITH_BUFFER_SINCE:
             known[ig["buffer_post_id"]] = (key, rec)
 
     needs_queue = False
@@ -215,7 +217,9 @@ def check(final: bool) -> dict:
     # 1. posts due in the last 36 hours
     recent = []
     for pid, (key, rec) in known.items():
-        due = ts(rec["instagram"].get("due"))
+        bp = byid.get(pid)
+        # Buffer's own time wins: a post may have been moved in Buffer after it was queued.
+        due = ts((bp or {}).get("dueAt")) or ts((bp or {}).get("sentAt")) or ts(rec["instagram"].get("due"))
         if due and NOW - timedelta(hours=36) <= due <= NOW - timedelta(minutes=5):
             recent.append((due, pid, key, rec))
     for due, pid, key, rec in sorted(recent):
