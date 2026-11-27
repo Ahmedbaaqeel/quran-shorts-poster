@@ -29,7 +29,7 @@ Environment:
                    has not gone to yet, e.g. a newly connected Instagram. The
                    schedule is not touched.
   POST_FILE=x.mp4  queue: post this schedule.json video right away (about 10
-                   minutes), logged under its own schedule key. Used for extra
+                   minutes), or at POST_AT (local "YYYY-MM-DDTHH:MM"), logged under its own schedule key. Used for extra
                    videos (kind "extra"), which the daily queue never picks.
   ACCOUNT=hadith   use the files in hadith/ (Haditho_97) instead of the top level
   BUFFER_API_URL   override the API endpoint (tests only)
@@ -67,6 +67,7 @@ DRY_RUN = os.environ.get("DRY_RUN", "") not in ("", "0", "false")
 POST_NOW = os.environ.get("POST_NOW", "") not in ("", "0", "false")
 FILL_MISSING = os.environ.get("FILL_MISSING", "") not in ("", "0", "false")
 POST_FILE = os.environ.get("POST_FILE", "").strip()
+POST_AT = os.environ.get("POST_AT", "").strip()  # with POST_FILE: local time "YYYY-MM-DDTHH:MM" (config timezone) instead of ~10 minutes
 TZ = ZoneInfo(CONFIG["timezone"])
 SERVICES = {"instagram", "tiktok", "youtube", "facebook"}
 if hasattr(sys.stdout, "reconfigure"):
@@ -390,8 +391,14 @@ def cmd_queue(args: argparse.Namespace) -> int:
                 time.sleep(15)
             else:
                 raise SystemExit(f"Video is not reachable at {url}")
-        due = (datetime.now(timezone.utc) + timedelta(minutes=10) if (POST_NOW or FILL_MISSING or POST_FILE)
-               else due_time(date.fromisoformat(entry["date"])))
+        if POST_FILE and POST_AT:
+            due = datetime.fromisoformat(POST_AT).replace(tzinfo=TZ)
+            if due < datetime.now(timezone.utc) + timedelta(minutes=10):
+                raise SystemExit(f"POST_AT {POST_AT} is in the past or less than 10 minutes away")
+        elif POST_NOW or FILL_MISSING or POST_FILE:
+            due = datetime.now(timezone.utc) + timedelta(minutes=10)
+        else:
+            due = due_time(date.fromisoformat(entry["date"]))
         for svc in todo:
             ch = channels[svc]
             for flag in ("isDisconnected", "isLocked", "isQueuePaused"):

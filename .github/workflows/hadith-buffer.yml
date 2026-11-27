@@ -13,6 +13,10 @@ on:
         description: "Post this video from hadith/videos right away (e.g. hadith-fajr-v2.mp4). Empty = normal queue."
         type: string
         default: ""
+      post_at:
+        description: "With post_file: post at this Riyadh time (YYYY-MM-DDTHH:MM) instead of in ~10 minutes"
+        type: string
+        default: ""
       dry_run:
         description: "Dry run (send nothing to Buffer)"
         type: boolean
@@ -59,6 +63,7 @@ jobs:
           VIDEO_BASE_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/hadith/videos
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
           POST_FILE: ${{ inputs.post_file }}
+          POST_AT: ${{ inputs.post_at }}
         run: python post.py queue
 
       - name: Save the posting log
