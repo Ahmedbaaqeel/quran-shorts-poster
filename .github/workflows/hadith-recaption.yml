@@ -1,0 +1,67 @@
+name: Haditho_97 re-queue with new captions
+
+# Removes the Haditho_97 posts that are still waiting in Buffer (due more than
+# 20 minutes from now) and queues them again, so they pick up the current
+# captions from hadith/schedule.json. Published posts are not touched.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only list the posts that would be re-queued"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hadith-buffer
+  cancel-in-progress: false
+
+jobs:
+  requeue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ACCOUNT: hadith
+      BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY_HADITH }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Find queued posts
+        id: find
+        run: |
+          python - <<'PY' > ids.txt
+          import json, datetime as dt
+          now = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=20)
+          for day, rec in sorted(json.load(open("hadith/posted.json")).items()):
+              ig = rec.get("instagram")
+              if isinstance(ig, dict) and ig.get("buffer_post_id") and dt.datetime.fromisoformat(ig["due"]) > now:
+                  print(ig["buffer_post_id"], day)
+          PY
+          cat ids.txt
+      - name: Remove them from Buffer
+        if: ${{ !inputs.dry_run }}
+        run: |
+          while read -r id day; do
+            echo "== $day $id"
+            BUFFER_POST_ID="$id" python buffer_remove.py
+          done < ids.txt
+      - name: Queue them again with the new captions
+        if: ${{ !inputs.dry_run }}
+        env:
+          VIDEO_BASE_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/hadith/videos
+        run: python post.py queue
+      - name: Save the posting log
+        if: always()
+        run: |
+          python post.py status
+          if [ -n "$(git status --porcelain hadith/posted.json)" ]; then
+            git config user.name "quran-shorts poster"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add hadith/posted.json
+            git commit -m "Haditho_97: re-queued with new captions $(date -u +%F)"
+            for i in 1 2 3; do git pull --rebase -q && git push && break; sleep 10; done
+          fi
