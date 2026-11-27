@@ -1,0 +1,58 @@
+name: Haditho_97 daily health check
+
+# After each 6 PM Riyadh post: checks that the post went out, that the Buffer
+# queue is full (no gaps or duplicates), that every remaining day has its video
+# and caption, and that the Buffer workflow is healthy. Fixes what it safely
+# can (re-queues missing posts, removes duplicates, retries a failed post once)
+# and writes the result to hadith/health.json.
+on:
+  schedule:
+    - cron: "37 15 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (check only, change nothing)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: hadith-buffer
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ACCOUNT: hadith
+      BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY_HADITH }}
+      GITHUB_TOKEN: ${{ github.token }}
+      VIDEO_BASE_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/hadith/videos
+      DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Make sure ffmpeg is there (hook card check)
+        run: command -v ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
+
+      - name: Check and fix
+        run: python hadith_health.py
+
+      - name: Save the result
+        if: always()
+        run: |
+          if [ -n "$(git status --porcelain hadith/posted.json hadith/health.json)" ]; then
+            git config user.name "quran-shorts poster"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add hadith/posted.json hadith/health.json
+            git commit -m "Haditho_97 health check $(date -u +%F)"
+            for i in 1 2 3; do git pull --rebase -q && git push && break; sleep 10; done
+          fi
