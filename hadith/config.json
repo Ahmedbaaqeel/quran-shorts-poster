@@ -4,11 +4,13 @@
   "post_days": [],
   "queue_ahead": 6,
   "platforms": [
-    "instagram"
+    "instagram",
+    "tiktok"
   ],
   "channel_names": {
     "instagram": "haditho_97"
   },
   "thumbnail_offset_ms": 1500,
-  "warn_when_days_left": 0
+  "warn_when_days_left": 0,
+  "tiktok_max_hashtags": 5
 }

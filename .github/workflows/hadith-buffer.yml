@@ -1,0 +1,74 @@
+name: Haditho_97 via Buffer (Instagram + TikTok)
+
+# Keeps the next few Haditho_97 videos queued in the Haditho_97 Buffer account
+# (secret BUFFER_API_KEY_HADITH), each at 18:00 Riyadh on its day. Buffer does
+# the publishing, so a late or missed GitHub run never delays a post.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+    - cron: "41 12 * * *"
+  workflow_dispatch:
+    inputs:
+      post_file:
+        description: "Post this video from hadith/videos right away (e.g. hadith-fajr-v2.mp4). Empty = normal queue."
+        type: string
+        default: ""
+      dry_run:
+        description: "Dry run (send nothing to Buffer)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hadith-buffer
+  cancel-in-progress: false
+
+jobs:
+  queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ACCOUNT: hadith
+      BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY_HADITH }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the Buffer key
+        id: key
+        run: |
+          if [ -z "$BUFFER_API_KEY" ]; then
+            echo "::warning::BUFFER_API_KEY_HADITH is not set yet. Nothing queued."
+            echo "ok=" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Show Buffer's post format (dry runs only, read-only)
+        if: ${{ steps.key.outputs.ok && inputs.dry_run }}
+        run: python post.py schema
+
+      - name: Queue Haditho_97 posts in Buffer
+        if: ${{ steps.key.outputs.ok }}
+        env:
+          VIDEO_BASE_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/hadith/videos
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          POST_FILE: ${{ inputs.post_file }}
+        run: python post.py queue
+
+      - name: Save the posting log
+        if: always()
+        run: |
+          python post.py status
+          if [ -n "$(git status --porcelain hadith/posted.json)" ]; then
+            git config user.name "quran-shorts poster"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add hadith/posted.json
+            git commit -m "Haditho_97 Buffer log $(date -u +%F)"
+            for i in 1 2 3; do git pull --rebase -q && git push && break; sleep 10; done
+          fi

@@ -5,13 +5,9 @@ name: Haditho_97 Instagram (direct)
 # 15:00 UTC = 18:00 Riyadh. The first run starts a little early and waits for
 # 18:00; the later runs only post if an earlier one missed. Off the hour on
 # purpose: GitHub drops or delays scheduled runs at busy times.
+# Paused 2026-11-27: Haditho_97 now posts through its own Buffer account
+# (hadith-buffer.yml). Manual runs only.
 on:
-  schedule:
-    - cron: "38 14 * * *"
-    - cron: "51 14 * * *"
-    - cron: "13 15 * * *"
-    - cron: "47 15 * * *"
-    - cron: "29 17 * * *"
   workflow_dispatch:
     inputs:
       action:
