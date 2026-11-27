@@ -14,6 +14,8 @@ Commands:
                                        into site/v/ (the Pages site)
   python post.py queue                 create the Buffer posts for the next
                                        queue_ahead videos not yet queued
+  python post.py requeue               re-create the posts still waiting in Buffer
+                                       (new captions, cover or post time)
   python post.py status                print what is scheduled and what is left
 
 Environment:
@@ -208,6 +210,58 @@ def all_platforms() -> list[str]:
     return list(CONFIG["platforms"]) + [p for p in CONFIG.get("optional_platforms", []) if p not in CONFIG["platforms"]]
 
 
+# ---------------------------------------------------------------- captions
+
+RECITER_TAGS = {  # English hashtag in the PC caption -> the Arabic one people search for
+    "#minshawi": "#المنشاوي", "#ghaith_samrin": "#غيث_سمرين", "#omar_diaa_aldeen": "#عمر_بن_ضياء_الدين",
+    "#mahmoud_gamal": "#محمود_جمال", "#muhammad_alqarni": "#محمد_القرني",
+}
+CTA = ("شاركها بنية الأجر، لعلها تكون صدقة جارية لك 🤍\n"
+       "📌 احفظ المقطع وارجع له كلما ضاق صدرك")
+
+
+def passage_key(file: str) -> str:
+    """'2026-11-23_39-53.mp4' -> '39:53', '2026-11-21_19-4-5.mp4' -> '19:4-5'."""
+    ref = Path(file).stem.split("_", 1)[-1]
+    surah, _, rest = ref.partition("-")
+    return f"{surah}:{rest}"
+
+
+def load_hooks() -> dict:
+    p = DATA / "hooks.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def reach_caption(entry: dict) -> str:
+    """config.json "caption_style": "reach" rewrites the PC caption for reach:
+    a short hook line first (hooks.json), the verse in correctly ordered ornate
+    brackets, the surah and reciter, a share/save line, the English, and five
+    Arabic-first hashtags. Any caption it can't parse is sent unchanged."""
+    cap = entry["caption"]
+    if CONFIG.get("caption_style") != "reach" or "\n- - -\n" not in cap:
+        return cap
+    verse, rest = cap.split("\n- - -\n", 1)
+    lines = [ln for ln in rest.splitlines() if ln.strip()]
+    if len(lines) < 2 or not lines[-1].lstrip().startswith("#"):
+        return cap
+    old_tags, info = lines[-1].split(), lines[:-1]
+    surah_line, english = info[0], info[1:]
+    # The PC writes U+FD3E ... U+FD3F, which shows the brackets back to front in
+    # right-to-left text. Arabic opens with U+FD3F and closes with U+FD3E.
+    verse = verse.strip().strip("﴾﴿").strip()
+    hooks = load_hooks()
+    hook = hooks.get(passage_key(entry["file"]))
+    if not hook and hooks.get("_fallback"):
+        fb = hooks["_fallback"]
+        hook = fb[sum(map(ord, entry["file"])) % len(fb)]
+    reciter = next((RECITER_TAGS.get(t.lower(), t) for t in old_tags if t.lower() in RECITER_TAGS), None)
+    third = "#سورة_الكهف" if entry.get("kind") == "jumuah" else "#راحة_نفسية"
+    tags = ["#قران_كريم", "#تلاوة_خاشعة", third, "#quran"] + ([reciter] if reciter else [])
+    parts = ([hook, ""] if hook else []) + [
+        f"﴿{verse}﴾", f"📖 {surah_line}", "", CTA, "", *english, "", " ".join(tags)]
+    return "\n".join(parts)[:2000]
+
+
 def youtube_title(caption: str) -> str:
     """YouTube needs a title (max 100 chars): the caption's hook line, plus #Shorts if it fits."""
     first = next((ln.strip() for ln in caption.splitlines() if ln.strip() and not ln.strip().startswith("#")), "")
@@ -259,7 +313,7 @@ def create_post(channel: dict, entry: dict, video_url: str, due: datetime) -> st
     if svc == "instagram":
         metadata = {"instagram": {"type": "reel", "shouldShareToFeed": True}}
     elif svc == "youtube":
-        metadata = {"youtube": {"type": "short", "title": youtube_title(entry["caption"]),
+        metadata = {"youtube": {"type": "short", "title": youtube_title(reach_caption(entry)),
                                 "categoryId": str(CONFIG.get("youtube_category_id", "27")),  # 27 = Education
                                 "privacy": "public", "madeForKids": False, "notifySubscribers": True}}
         if CONFIG.get("youtube_label_ai") is not None:
@@ -270,7 +324,7 @@ def create_post(channel: dict, entry: dict, video_url: str, due: datetime) -> st
         metadata = {"tiktok": {}}
     if svc == "tiktok" and CONFIG.get("tiktok_label_ai") is not None:
         metadata["tiktok"]["isAiGenerated"] = bool(CONFIG["tiktok_label_ai"])
-    text = entry["caption"]
+    text = reach_caption(entry)
     if svc == "tiktok":
         text = limit_hashtags(text, int(CONFIG.get("tiktok_max_hashtags", 5)))
     video: dict = {"url": video_url}
@@ -419,6 +473,41 @@ def cmd_queue(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_requeue(args: argparse.Namespace) -> int:
+    """Remove the posts still waiting in Buffer (due more than 20 minutes from
+    now) and queue them again, so they pick up the current captions, cover and
+    post time. Published posts are never touched."""
+    posted = load_posted()
+    cutoff = datetime.now(timezone.utc) + timedelta(minutes=20)
+    waiting = [(day, svc, rec[svc]["buffer_post_id"]) for day, rec in sorted(posted.items()) for svc in SERVICES
+               if isinstance(rec.get(svc), dict) and rec[svc].get("buffer_post_id")
+               and datetime.fromisoformat(rec[svc]["due"]) > cutoff]
+    log(f"{len(waiting)} queued Buffer posts to re-create")
+    # Check every video is reachable before deleting anything, so a failed
+    # re-create never leaves a day empty.
+    pages = os.environ.get("PAGES_URL", "").rstrip("/")
+    base = os.environ.get("VIDEO_BASE_URL", "").rstrip("/") or (f"{pages}/v" if pages else "")
+    sizes = {e["file"]: e["size"] for e in SCHEDULE["videos"]}
+    for f in sorted({posted[d]["file"] for d, _, _ in waiting}):
+        if base and not url_ready(f"{base}/{f}", sizes.get(f, -1)):
+            raise SystemExit(f"{base}/{f} is not reachable; nothing was removed from Buffer.")
+    for day, svc, pid in waiting:
+        log(f"  {day} {svc} {pid} {posted[day]['file']}")
+        if DRY_RUN:
+            continue
+        res = gql("mutation($i: DeletePostInput!) { deletePost(input: $i) { __typename } }", {"i": {"id": pid}})
+        kind = (res.get("deletePost") or {}).get("__typename", "")
+        if "error" in kind.lower():
+            raise SystemExit(f"Buffer refused to delete {pid}: {res}")
+        del posted[day][svc]
+        if not any(k in SERVICES for k in posted[day]):
+            del posted[day]
+        save_posted(posted)  # after each delete, so a failure later never loses track
+    if DRY_RUN:
+        return 0
+    return cmd_queue(args)
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     t = today()
     posted = load_posted()
@@ -463,10 +552,11 @@ def main() -> int:
     s.add_argument("--out", default="site")
     s.add_argument("--local-dir", help="copy from this folder instead of the GitHub release (tests)")
     sub.add_parser("queue")
+    sub.add_parser("requeue")
     sub.add_parser("status")
     sub.add_parser("schema")
     args = ap.parse_args()
-    return {"stage": cmd_stage, "queue": cmd_queue, "status": cmd_status, "schema": cmd_schema}[args.cmd](args)
+    return {"stage": cmd_stage, "queue": cmd_queue, "requeue": cmd_requeue, "status": cmd_status, "schema": cmd_schema}[args.cmd](args)
 
 
 if __name__ == "__main__":
