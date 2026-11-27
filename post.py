@@ -15,7 +15,8 @@ Commands:
   python post.py queue                 create the Buffer posts for the next
                                        queue_ahead videos not yet queued
   python post.py requeue               re-create the posts still waiting in Buffer
-                                       (new captions, cover or post time)
+                                       (new captions, cover or post time);
+                                       CLEAR_ONLY=1 only removes them
   python post.py status                print what is scheduled and what is left
 
 Environment:
@@ -503,8 +504,8 @@ def cmd_requeue(args: argparse.Namespace) -> int:
         if not any(k in SERVICES for k in posted[day]):
             del posted[day]
         save_posted(posted)  # after each delete, so a failure later never loses track
-    if DRY_RUN:
-        return 0
+    if DRY_RUN or os.environ.get("CLEAR_ONLY", "") not in ("", "0", "false"):
+        return 0  # CLEAR_ONLY=1: leave the days empty, e.g. before poster_sync.py moves the schedule
     return cmd_queue(args)
 
 
