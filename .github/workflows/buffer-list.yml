@@ -1,0 +1,32 @@
+name: Buffer queue (Quran, read-only)
+
+# Lists the qurano_97 posts waiting in Buffer, to confirm nothing is doubled.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+        run: |
+          python - <<'PY'
+          import post
+          chans = post.find_channels()
+          org = post.gql("query { account { organizations { id } } }")["account"]["organizations"][0]["id"]
+          for svc, ch in sorted(chans.items()):
+              res = post.gql("""query($i: PostsInput!) { posts(input: $i, first: 50) { edges { node { id status dueAt text } } } }""",
+                             {"i": {"organizationId": org, "filter": {"channelIds": [ch["id"]], "status": ["scheduled"]}}})
+              nodes = [e["node"] for e in res["posts"]["edges"]]
+              print(f"{svc} ({ch['name']}): {len(nodes)} scheduled")
+              for n in sorted(nodes, key=lambda n: n["dueAt"] or ""):
+                  print(f"  {n['dueAt']} {n['id']} {(n['text'] or '')[:50]!r}")
+          PY
