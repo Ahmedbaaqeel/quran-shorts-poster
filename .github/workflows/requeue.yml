@@ -12,6 +12,10 @@ on:
         description: "Only list the posts that would be re-queued"
         type: boolean
         default: false
+      clear_only:
+        description: "Only remove the waiting posts (before poster_sync.py moves the schedule)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -34,6 +38,7 @@ jobs:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          CLEAR_ONLY: ${{ inputs.clear_only && '1' || '' }}
         run: python post.py requeue
       - name: Save the posting log
         if: always()
@@ -43,6 +48,6 @@ jobs:
             git config user.name "quran-shorts poster"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add posted.json
-            git commit -m "Re-queued with new captions $(date -u +%F)"
+            git commit -m "Buffer re-queue log $(date -u +%F)"
             for i in 1 2 3; do git pull --rebase -q && git push && break; sleep 10; done
           fi
