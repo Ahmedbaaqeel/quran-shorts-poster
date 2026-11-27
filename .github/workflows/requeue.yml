@@ -1,0 +1,48 @@
+name: Re-queue with new captions (Quran)
+
+# Removes the qurano_97 posts still waiting in Buffer (due more than 20
+# minutes from now) and queues them again, so they pick up the current
+# captions (hooks.json, config.json "caption_style"), cover frame and post
+# time. Published posts are never touched. Uses the videos already on the
+# Pages site (the daily run keeps the next queue_ahead videos there).
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only list the posts that would be re-queued"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-post
+  cancel-in-progress: false
+
+jobs:
+  requeue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Re-create the waiting Buffer posts
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: python post.py requeue
+      - name: Save the posting log
+        if: always()
+        run: |
+          python post.py status
+          if [ -n "$(git status --porcelain posted.json)" ]; then
+            git config user.name "quran-shorts poster"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add posted.json
+            git commit -m "Re-queued with new captions $(date -u +%F)"
+            for i in 1 2 3; do git pull --rebase -q && git push && break; sleep 10; done
+          fi
