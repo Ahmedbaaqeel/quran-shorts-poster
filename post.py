@@ -4,7 +4,8 @@
 Each run keeps the next config.json "queue_ahead" scheduled videos queued in
 Buffer, each for its own posting day (config.json "post_days") at the
 configured time. Buffer then publishes them to the connected Instagram and
-TikTok channels, so a few missed GitHub runs never stop a post. Nothing here
+TikTok channels (plus YouTube Shorts and Facebook Reels once connected, see
+config.json "optional_platforms"), so a few missed GitHub runs never stop a post. Nothing here
 needs the owner's PC.
 
 Commands:
@@ -67,7 +68,7 @@ POST_NOW = os.environ.get("POST_NOW", "") not in ("", "0", "false")
 FILL_MISSING = os.environ.get("FILL_MISSING", "") not in ("", "0", "false")
 POST_FILE = os.environ.get("POST_FILE", "").strip()
 TZ = ZoneInfo(CONFIG["timezone"])
-SERVICES = {"instagram", "tiktok"}
+SERVICES = {"instagram", "tiktok", "youtube", "facebook"}
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # captions are Arabic
 
@@ -199,6 +200,23 @@ def channel_wanted(svc: str, name: str) -> bool:
     return _norm(name) not in taken
 
 
+def all_platforms() -> list[str]:
+    """config.json "platforms" must be connected (a missing one fails the run).
+    "optional_platforms" (e.g. youtube, facebook) are posted to once they are
+    connected in Buffer and silently skipped until then."""
+    return list(CONFIG["platforms"]) + [p for p in CONFIG.get("optional_platforms", []) if p not in CONFIG["platforms"]]
+
+
+def youtube_title(caption: str) -> str:
+    """YouTube needs a title (max 100 chars): the caption's hook line, plus #Shorts if it fits."""
+    first = next((ln.strip() for ln in caption.splitlines() if ln.strip() and not ln.strip().startswith("#")), "")
+    first = re.sub(r"\s+", " ", first)
+    if len(first) > 100:
+        first = first[:99].rstrip() + "…"
+    tag = " #Shorts"
+    return first + tag if len(first) + len(tag) <= 100 else first
+
+
 def find_channels() -> dict[str, dict]:
     """Return {"instagram": channel, "tiktok": channel} from the Buffer account."""
     orgs = gql("query { account { organizations { id name } } }")["account"]["organizations"]
@@ -208,7 +226,7 @@ def find_channels() -> dict[str, dict]:
                     "{ id name service isDisconnected isLocked isQueuePaused } }", {"org": org["id"]})["channels"]
         for c in chans:
             svc = str(c.get("service", "")).lower()
-            if svc in SERVICES and svc in CONFIG["platforms"] and svc not in found and channel_wanted(svc, c.get("name")):
+            if svc in SERVICES and svc in all_platforms() and svc not in found and channel_wanted(svc, c.get("name")):
                 found[svc] = c
     return found
 
@@ -237,7 +255,18 @@ def limit_hashtags(text: str, keep: int) -> str:
 
 def create_post(channel: dict, entry: dict, video_url: str, due: datetime) -> str:
     svc = channel["service"].lower()
-    metadata = {"instagram": {"type": "reel", "shouldShareToFeed": True}} if svc == "instagram" else {"tiktok": {}}
+    if svc == "instagram":
+        metadata = {"instagram": {"type": "reel", "shouldShareToFeed": True}}
+    elif svc == "youtube":
+        metadata = {"youtube": {"type": "short", "title": youtube_title(entry["caption"]),
+                                "categoryId": str(CONFIG.get("youtube_category_id", "27")),  # 27 = Education
+                                "privacy": "public", "madeForKids": False, "notifySubscribers": True}}
+        if CONFIG.get("youtube_label_ai") is not None:
+            metadata["youtube"]["isAiGenerated"] = bool(CONFIG["youtube_label_ai"])
+    elif svc == "facebook":
+        metadata = {"facebook": {"type": "reel"}}
+    else:
+        metadata = {"tiktok": {}}
     if svc == "tiktok" and CONFIG.get("tiktok_label_ai") is not None:
         metadata["tiktok"]["isAiGenerated"] = bool(CONFIG["tiktok_label_ai"])
     text = entry["caption"]
@@ -341,7 +370,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
 
     channels = {} if DRY_RUN and not os.environ.get("BUFFER_API_KEY") else find_channels()
     if DRY_RUN and not channels:
-        channels = {s: {"id": f"dry-{s}", "service": s, "name": s} for s in CONFIG["platforms"]}
+        channels = {s: {"id": f"dry-{s}", "service": s, "name": s} for s in all_platforms()}
     missing = [s for s in CONFIG["platforms"] if s not in channels]
     for s in missing:
         gh_warning(f"No {s} channel is connected in Buffer.")
@@ -395,7 +424,8 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 SCHEMA_TYPES = ["CreatePostInput", "AssetInput", "VideoAssetInput", "VideoMetadataInput", "PostInputMetaData",
-                "InstagramPostMetadataInput", "TikTokPostMetadataInput", "ShareMode", "SchedulingType", "PostType",
+                "InstagramPostMetadataInput", "TikTokPostMetadataInput", "YoutubePostMetadataInput",
+                "FacebookPostMetadataInput", "PostTypeFacebook", "ShareMode", "SchedulingType", "PostType",
                 "PostActionPayload", "MutationError", "PostActionSuccess"]
 
 

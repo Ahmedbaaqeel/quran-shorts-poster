@@ -11,5 +11,9 @@
   },
   "thumbnail_offset_ms": 1500,
   "warn_when_days_left": 0,
-  "tiktok_max_hashtags": 5
+  "tiktok_max_hashtags": 5,
+  "optional_platforms": [
+    "youtube",
+    "facebook"
+  ]
 }
