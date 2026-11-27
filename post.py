@@ -27,6 +27,9 @@ Environment:
                    away (about 10 minutes) to every platform in config.json it
                    has not gone to yet, e.g. a newly connected Instagram. The
                    schedule is not touched.
+  POST_FILE=x.mp4  queue: post this schedule.json video right away (about 10
+                   minutes), logged under its own schedule key. Used for extra
+                   videos (kind "extra"), which the daily queue never picks.
   ACCOUNT=hadith   use the files in hadith/ (Haditho_97) instead of the top level
   BUFFER_API_URL   override the API endpoint (tests only)
   TODAY            override today's date, YYYY-MM-DD (tests only)
@@ -38,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -61,6 +65,7 @@ API_URL = os.environ.get("BUFFER_API_URL", "https://api.buffer.com")
 DRY_RUN = os.environ.get("DRY_RUN", "") not in ("", "0", "false")
 POST_NOW = os.environ.get("POST_NOW", "") not in ("", "0", "false")
 FILL_MISSING = os.environ.get("FILL_MISSING", "") not in ("", "0", "false")
+POST_FILE = os.environ.get("POST_FILE", "").strip()
 TZ = ZoneInfo(CONFIG["timezone"])
 SERVICES = {"instagram", "tiktok"}
 if hasattr(sys.stdout, "reconfigure"):
@@ -96,15 +101,21 @@ def entries_on(day: date) -> list[dict]:
     return [e for e in SCHEDULE["videos"] if e["date"] == day.isoformat()]
 
 
+def is_extra(e: dict) -> bool:
+    """Extra videos are posted only on request (POST_FILE), never by the daily queue."""
+    return e.get("kind") == "extra"
+
+
 def upcoming(day: date) -> list[dict]:
     """The next queue_ahead scheduled videos from day on (Buffer free plan allows 10 per channel)."""
     ahead = max(1, int(CONFIG.get("queue_ahead", 1)))
-    return [e for e in SCHEDULE["videos"] if e["date"] >= day.isoformat()][:ahead]
+    return [e for e in SCHEDULE["videos"] if e["date"] >= day.isoformat() and not is_extra(e)][:ahead]
 
 
 def next_unposted(posted: dict, day: date) -> dict | None:
     done = {p.get("file") for p in posted.values()}
-    return next((e for e in SCHEDULE["videos"] if e["date"] >= day.isoformat() and e["file"] not in done), None)
+    return next((e for e in SCHEDULE["videos"] if e["date"] >= day.isoformat() and e["file"] not in done
+                 and not is_extra(e)), None)
 
 
 # ---------------------------------------------------------------- stage
@@ -212,17 +223,32 @@ mutation($input: CreatePostInput!) {
 }"""
 
 
+def limit_hashtags(text: str, keep: int) -> str:
+    """TikTok through Buffer takes at most 5 hashtags: keep the first `keep`."""
+    seen = 0
+
+    def one(m):
+        nonlocal seen
+        seen += 1
+        return m.group(0) if seen <= keep else ""
+    out = re.sub(r"[ \t]*#[^\s#]+", one, text)
+    return re.sub(r"[ \t]+\n", "\n", out).rstrip()
+
+
 def create_post(channel: dict, entry: dict, video_url: str, due: datetime) -> str:
     svc = channel["service"].lower()
     metadata = {"instagram": {"type": "reel", "shouldShareToFeed": True}} if svc == "instagram" else {"tiktok": {}}
     if svc == "tiktok" and CONFIG.get("tiktok_label_ai") is not None:
         metadata["tiktok"]["isAiGenerated"] = bool(CONFIG["tiktok_label_ai"])
+    text = entry["caption"]
+    if svc == "tiktok":
+        text = limit_hashtags(text, int(CONFIG.get("tiktok_max_hashtags", 5)))
     video: dict = {"url": video_url}
     if CONFIG.get("thumbnail_offset_ms"):
         video["metadata"] = {"thumbnailOffset": int(CONFIG["thumbnail_offset_ms"])}
     payload = {
         "channelId": channel["id"],
-        "text": entry["caption"],
+        "text": text,
         "schedulingType": "automatic",
         "mode": "customScheduled",
         "dueAt": due.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
@@ -270,7 +296,13 @@ def cmd_queue(args: argparse.Namespace) -> int:
     # A video already posted on another day (for example by a POST_NOW test) never goes out twice.
     todays = [e for e in upcoming(t) if posted.get(e["date"], {}).get("file", e["file"]) == e["file"]
               and not any(p.get("file") == e["file"] for d, p in posted.items() if d != e["date"])]
-    if FILL_MISSING:
+    if POST_FILE:
+        src = next((e for e in SCHEDULE["videos"] if e["file"] == POST_FILE), None)
+        if not src:
+            raise SystemExit(f"POST_FILE: {POST_FILE} is not in schedule.json")
+        log(f"POST_FILE: posting {POST_FILE} (key {src['date']}) in about 10 minutes")
+        todays = [src]
+    elif FILL_MISSING:
         gaps = [d for d in sorted(posted) if any(s not in posted[d] for s in CONFIG["platforms"])]
         if not gaps:
             raise SystemExit("FILL_MISSING: every posted video is already on " + ", ".join(CONFIG["platforms"]))
@@ -329,7 +361,7 @@ def cmd_queue(args: argparse.Namespace) -> int:
                 time.sleep(15)
             else:
                 raise SystemExit(f"Video is not reachable at {url}")
-        due = (datetime.now(timezone.utc) + timedelta(minutes=10) if (POST_NOW or FILL_MISSING)
+        due = (datetime.now(timezone.utc) + timedelta(minutes=10) if (POST_NOW or FILL_MISSING or POST_FILE)
                else due_time(date.fromisoformat(entry["date"])))
         for svc in todo:
             ch = channels[svc]
