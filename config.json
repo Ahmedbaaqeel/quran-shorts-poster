@@ -22,5 +22,7 @@
     "youtube",
     "facebook"
   ],
-  "schedule_until": "2026-12-01"
+  "schedule_until": "2026-12-01",
+  "instagram_trial_reels": "alternate",
+  "instagram_trial_graduation": "performance"
 }
