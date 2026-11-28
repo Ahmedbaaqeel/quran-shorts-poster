@@ -3,8 +3,12 @@
   "post_time": "21:00",
   "post_days": [
     "mon",
+    "tue",
     "wed",
-    "fri"
+    "thu",
+    "fri",
+    "sat",
+    "sun"
   ],
   "queue_ahead": 6,
   "platforms": [
@@ -17,5 +21,6 @@
   "optional_platforms": [
     "youtube",
     "facebook"
-  ]
+  ],
+  "schedule_until": "2026-12-01"
 }
