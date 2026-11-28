@@ -309,10 +309,50 @@ def limit_hashtags(text: str, keep: int) -> str:
     return re.sub(r"[ \t]+\n", "\n", out).rstrip()
 
 
+_TRIAL_VALUE: list = []
+
+
+def trial_strategy() -> str | None:
+    """Buffer's enum value for "graduate the trial reel to followers if it does well"
+    (read from the schema, so a renamed value doesn't break posting)."""
+    if not _TRIAL_VALUE:
+        try:
+            ty = gql('query { __type(name: "InstagramTrialReelGraduationStrategy") { enumValues { name } } }')["__type"]
+            names = [e["name"] for e in (ty or {}).get("enumValues") or []]
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 - never block a post on this
+            log(f"trial reels: could not read Buffer's options ({exc})")
+            names = []
+        want = str(CONFIG.get("instagram_trial_graduation", "performance")).lower()
+        pick = next((n for n in names if want in n.lower()), None)
+        if not pick and names:
+            pick = next((n for n in names if "manual" not in n.lower()), names[0])
+        _TRIAL_VALUE.append(pick)
+    return _TRIAL_VALUE[0]
+
+
+def wants_trial(entry: dict) -> bool:
+    """config.json "instagram_trial_reels": "off" (default), "all", or "alternate"
+    (every other day, so normal and trial reels can be compared). Trial reels are
+    shown to non-followers first; Instagram shares them to followers if they do well."""
+    mode = str(CONFIG.get("instagram_trial_reels", "off")).lower()
+    if mode == "all":
+        return True
+    if mode == "alternate":
+        try:
+            return date.fromisoformat(entry["date"][:10]).toordinal() % 2 == 1
+        except ValueError:
+            return False
+    return False
+
+
 def create_post(channel: dict, entry: dict, video_url: str, due: datetime) -> str:
     svc = channel["service"].lower()
     if svc == "instagram":
         metadata = {"instagram": {"type": "reel", "shouldShareToFeed": True}}
+        if wants_trial(entry) and not DRY_RUN and (strategy := trial_strategy()):
+            metadata["instagram"]["trialReelGraduationStrategy"] = strategy
+        elif wants_trial(entry):
+            metadata["instagram"]["trialReelGraduationStrategy"] = "<from Buffer schema>"
     elif svc == "youtube":
         metadata = {"youtube": {"type": "short", "title": youtube_title(reach_caption(entry)),
                                 "categoryId": str(CONFIG.get("youtube_category_id", "27")),  # 27 = Education
@@ -344,9 +384,19 @@ def create_post(channel: dict, entry: dict, video_url: str, due: datetime) -> st
     if DRY_RUN:
         log(f"DRY RUN createPost {svc}: {json.dumps(payload, ensure_ascii=False)[:400]}")
         return "dry-run"
-    res = gql(CREATE_POST, {"input": payload})["createPost"]
+    try:
+        res = gql(CREATE_POST, {"input": payload})["createPost"]
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
+        res = {"message": str(exc)}
+    if res.get("__typename") != "PostActionSuccess" and "trialReelGraduationStrategy" in metadata.get("instagram", {}):
+        # Trial reels are not open to every account: post a normal reel instead of missing the day.
+        gh_warning(f"instagram trial reel refused ({res.get('message') or res}); posting a normal reel")
+        del metadata["instagram"]["trialReelGraduationStrategy"]
+        res = gql(CREATE_POST, {"input": payload})["createPost"]
     if res.get("__typename") != "PostActionSuccess":
         raise RuntimeError(f"{svc}: {res.get('message') or res}")
+    if "trialReelGraduationStrategy" in metadata.get("instagram", {}):
+        log(f"instagram: trial reel ({metadata['instagram']['trialReelGraduationStrategy']})")
     return res["post"]["id"]
 
 
@@ -521,7 +571,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 SCHEMA_TYPES = ["CreatePostInput", "AssetInput", "VideoAssetInput", "VideoMetadataInput", "PostInputMetaData",
-                "InstagramPostMetadataInput", "TikTokPostMetadataInput", "YoutubePostMetadataInput",
+                "InstagramPostMetadataInput", "InstagramTrialReelGraduationStrategy", "TikTokPostMetadataInput", "YoutubePostMetadataInput",
                 "FacebookPostMetadataInput", "PostTypeFacebook", "ShareMode", "SchedulingType", "PostType",
                 "PostActionPayload", "MutationError", "PostActionSuccess"]
 
